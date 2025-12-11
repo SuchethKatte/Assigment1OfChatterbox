@@ -356,22 +356,61 @@ private:
 			// Check for known commands.  None of this example code is secure or robust.
 			// Don't write a real server like this, please.
 
+            // ---- replace the existing HELLO block with this ----
             if (strncmp(cmd, "HELLO ", 6) == 0)
             {
+                // stash the connection handle before we release the message
+                HSteamNetConnection hConn = pIncomingMsg->m_conn;
+
                 SteamNetworkingIPAddr listenAddr;
                 if (!listenAddr.ParseString(cmd + 6))
                 {
                     Printf("Invalid HELLO address: %s\n", cmd + 6);
+                    // we already released the message above, just continue listening
                     continue;
                 }
 
-                Printf("Server announced listen addr %s\n",
-                    AddrToString(listenAddr).c_str());
+                Printf("Server announced listen addr %s\n", AddrToString(listenAddr).c_str());
 
-                // Associate address with THIS connection
-                servers.push_back({ listenAddr, pIncomingMsg->m_conn });
+                //
+                // 1) Send existing servers to the NEW server
+                //
+                // Format: we will follow your earlier style: send a marker "SERVER_LIST",
+                // then one line per server containing the address, then "END"
+                //
+                m_pInterface->SendMessageToConnection(hConn, "SERVER_LIST", (uint32)strlen("SERVER_LIST"), k_nSteamNetworkingSend_Reliable, nullptr);
+
+                for (const auto &s : servers)
+                {
+                    // skip if somehow the connection matches (shouldn't yet)
+                    if (s.conn == hConn) continue;
+
+                    std::string line = AddrToString(s.addr);
+                    m_pInterface->SendMessageToConnection(hConn, line.c_str(), (uint32)line.size(), k_nSteamNetworkingSend_Reliable, nullptr);
+                }
+
+                m_pInterface->SendMessageToConnection(hConn, "END", (uint32)strlen("END"), k_nSteamNetworkingSend_Reliable, nullptr);
+
+                //
+                // 2) Inform existing servers about the NEW server
+                //
+                std::string notify = "NEW_SERVER " + AddrToString(listenAddr);
+                for (const auto &s : servers)
+                {
+                    if (s.conn == hConn) continue; // skip if same
+                    m_pInterface->SendMessageToConnection(s.conn, notify.c_str(), (uint32)notify.size(), k_nSteamNetworkingSend_Reliable, nullptr);
+                }
+
+                //
+                // 3) Finally register the new server in our list
+                //
+                servers.push_back({ listenAddr, hConn });
+
+                // done handling HELLO
                 continue;
             }
+
+            
 
 
 			if ( strncmp( cmd, "/nick", 5 ) == 0 )
